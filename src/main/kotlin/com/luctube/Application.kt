@@ -13,13 +13,11 @@ import kotlinx.serialization.json.*
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.stream.StreamInfo
-import org.schabi.newpipe.extractor.search.SearchInfo
-import org.schabi.newpipe.extractor.search.SearchExtractor
-import org.schabi.newpipe.extractor.linkhandler.SearchQueryHandler
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
+import org.schabi.newpipe.extractor.InfoItem
 
 fun main() {
     NewPipe.init(DownloaderImpl)
-
     val port = System.getenv("PORT")?.toInt() ?: 8080
 
     embeddedServer(Netty, port = port) {
@@ -36,68 +34,38 @@ fun main() {
                 call.respond(mapOf("status" to "ok"))
             }
 
-            // Trending
             get("/trending") {
                 val region = call.parameters["region"] ?: "FR"
                 try {
-                    val yt = ServiceList.YouTube
-                    val kioskList = yt.kioskList
+                    val kioskList = ServiceList.YouTube.kioskList
                     kioskList.setCountryCode(region)
                     val extractor = kioskList.defaultKioskExtractor
                     extractor.fetchPage()
-                    val page = extractor.initialPage
-                    val result = page.items.mapNotNull { item ->
-                        try {
-                            val vid = item.url.substringAfter("v=").substringBefore("&")
-                            buildJsonObject {
-                                put("url", "/watch?v=$vid")
-                                put("title", item.name ?: "")
-                                put("thumbnail", item.thumbnails.firstOrNull()?.url ?: "https://i.ytimg.com/vi/$vid/hqdefault.jpg")
-                                put("uploaderName", item.uploaderName ?: "")
-                                put("uploaderUrl", "/channel/${item.uploaderUrl?.substringAfterLast("/") ?: ""}")
-                                put("duration", item.duration)
-                                put("views", item.viewCount)
-                                put("uploadedDate", item.textualUploadDate ?: "")
-                            }
-                        } catch (e: Exception) { null }
+                    val result = extractor.initialPage.items.mapNotNull { item ->
+                        streamItemToJson(item)
                     }
                     call.respond(result)
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "error")))
                 }
             }
 
-            // Search
             get("/search") {
                 val q = call.parameters["q"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing q"))
                 try {
-                    val yt = ServiceList.YouTube
-                    val linkHandler = yt.searchQHFactory.fromQuery(q, listOf("videos"), "")
-                    val extractor = yt.getSearchExtractor(linkHandler)
+                    val linkHandler = ServiceList.YouTube.searchQHFactory.fromQuery(q, listOf("videos"), "")
+                    val extractor = ServiceList.YouTube.getSearchExtractor(linkHandler)
                     extractor.fetchPage()
                     val items = extractor.initialPage.items.mapNotNull { item ->
-                        try {
-                            val vid = item.url.substringAfter("v=").substringBefore("&")
-                            buildJsonObject {
-                                put("url", "/watch?v=$vid")
-                                put("title", item.name ?: "")
-                                put("thumbnail", item.thumbnails.firstOrNull()?.url ?: "https://i.ytimg.com/vi/$vid/hqdefault.jpg")
-                                put("uploaderName", item.uploaderName ?: "")
-                                put("uploaderUrl", "/channel/${item.uploaderUrl?.substringAfterLast("/") ?: ""}")
-                                put("duration", item.duration)
-                                put("views", item.viewCount)
-                                put("uploadedDate", item.textualUploadDate ?: "")
-                            }
-                        } catch (e: Exception) { null }
+                        streamItemToJson(item)
                     }
                     call.respond(mapOf("items" to items))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "error")))
                 }
             }
 
-            // Streams
             get("/streams/{videoId}") {
                 val videoId = call.parameters["videoId"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing videoId"))
@@ -106,7 +74,7 @@ fun main() {
                     val info = StreamInfo.getInfo(ServiceList.YouTube, url)
 
                     val videoStreams = info.videoStreams
-                        .filter { it.content != null && it.content.isNotEmpty() }
+                        .filter { !it.content.isNullOrEmpty() }
                         .map { s ->
                             buildJsonObject {
                                 put("url", s.content)
@@ -116,7 +84,7 @@ fun main() {
                         }
 
                     val audioStreams = info.audioStreams
-                        .filter { it.content != null && it.content.isNotEmpty() }
+                        .filter { !it.content.isNullOrEmpty() }
                         .map { s ->
                             buildJsonObject {
                                 put("url", s.content)
@@ -126,18 +94,10 @@ fun main() {
                         }
 
                     val related = info.relatedItems.take(20).mapNotNull { item ->
-                        try {
-                            val vid = item.url.substringAfter("v=").substringBefore("&")
-                            buildJsonObject {
-                                put("url", "/watch?v=$vid")
-                                put("title", item.name ?: "")
-                                put("thumbnail", item.thumbnails.firstOrNull()?.url ?: "https://i.ytimg.com/vi/$vid/hqdefault.jpg")
-                                put("uploaderName", item.uploaderName ?: "")
-                                put("uploaderUrl", "/channel/${item.uploaderUrl?.substringAfterLast("/") ?: ""}")
-                                put("duration", item.duration)
-                            }
-                        } catch (e: Exception) { null }
+                        streamItemToJson(item)
                     }
+
+                    val hlsUrl = try { info.hlsUrl } catch (e: Exception) { null }
 
                     call.respond(buildJsonObject {
                         put("title", info.name ?: "")
@@ -145,10 +105,10 @@ fun main() {
                         put("uploadDate", info.textualUploadDate ?: "")
                         put("uploader", info.uploaderName ?: "")
                         put("uploaderUrl", "/channel/${info.uploaderUrl?.substringAfterLast("/") ?: ""}")
-                        put("uploaderAvatar", info.uploaderAvatars.firstOrNull()?.url ?: "")
+                        put("uploaderAvatar", JsonPrimitive(info.uploaderAvatars.firstOrNull()?.url ?: ""))
                         put("uploaderSubscriberCount", info.uploaderSubscriberCount)
                         put("thumbnailUrl", "https://i.ytimg.com/vi/$videoId/maxresdefault.jpg")
-                        put("hls", info.hlsUrl?.takeIf { it.isNotEmpty() } ?: JsonNull)
+                        put("hls", if (!hlsUrl.isNullOrEmpty()) JsonPrimitive(hlsUrl) else JsonNull)
                         put("duration", info.duration)
                         put("views", info.viewCount)
                         put("likes", info.likeCount)
@@ -157,9 +117,33 @@ fun main() {
                         put("relatedStreams", JsonArray(related))
                     })
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "error")))
                 }
             }
         }
     }.start(wait = true)
+}
+
+fun streamItemToJson(item: InfoItem): JsonObject? {
+    return try {
+        val url = item.url ?: return null
+        val vid = url.substringAfter("v=").substringBefore("&").take(20)
+        if (vid.isBlank()) return null
+
+        // Cast vers StreamInfoItem pour accéder aux propriétés spécifiques
+        val streamItem = item as? StreamInfoItem
+
+        buildJsonObject {
+            put("url", "/watch?v=$vid")
+            put("title", item.name ?: "")
+            put("thumbnail", item.thumbnails.firstOrNull()?.url ?: "https://i.ytimg.com/vi/$vid/hqdefault.jpg")
+            put("uploaderName", streamItem?.uploaderName ?: "")
+            put("uploaderUrl", "/channel/${streamItem?.uploaderUrl?.substringAfterLast("/") ?: ""}")
+            put("duration", streamItem?.duration ?: 0L)
+            put("views", streamItem?.viewCount ?: 0L)
+            put("uploadedDate", streamItem?.textualUploadDate ?: "")
+        }
+    } catch (e: Exception) {
+        null
+    }
 }
