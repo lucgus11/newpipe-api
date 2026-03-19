@@ -35,10 +35,8 @@ fun main() {
             }
 
             get("/trending") {
-                val region = call.parameters["region"] ?: "FR"
                 try {
                     val kioskList = ServiceList.YouTube.kioskList
-                    kioskList.setCountryCode(region)
                     val extractor = kioskList.defaultKioskExtractor
                     extractor.fetchPage()
                     val result = extractor.initialPage.items.mapNotNull { item ->
@@ -130,13 +128,13 @@ fun streamItemToJson(item: InfoItem): JsonObject? {
         val vid = url.substringAfter("v=").substringBefore("&").take(20)
         if (vid.isBlank()) return null
 
-        // Cast vers StreamInfoItem pour accéder aux propriétés spécifiques
         val streamItem = item as? StreamInfoItem
 
         buildJsonObject {
             put("url", "/watch?v=$vid")
             put("title", item.name ?: "")
-            put("thumbnail", item.thumbnails.firstOrNull()?.url ?: "https://i.ytimg.com/vi/$vid/hqdefault.jpg")
+            put("thumbnail", item.thumbnails.firstOrNull()?.url
+                ?: "https://i.ytimg.com/vi/$vid/hqdefault.jpg")
             put("uploaderName", streamItem?.uploaderName ?: "")
             put("uploaderUrl", "/channel/${streamItem?.uploaderUrl?.substringAfterLast("/") ?: ""}")
             put("duration", streamItem?.duration ?: 0L)
